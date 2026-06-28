@@ -4,6 +4,10 @@ Provenance Guard is a Flask API for classifying submitted creative content as `l
 
 The goal is not perfect AI detection. The goal is a cautious provenance workflow: show uncertainty when evidence is mixed, avoid accusing creators, preserve the evidence behind every decision, and provide an appeal path when the system may be wrong.
 
+## Portfolio Walkthrough
+
+Short video walkthrough: https://www.loom.com/share/9ba70a307fae408288b3cb90a89c23c4
+
 ## Submission Checklist Coverage
 
 | Requirement | Where it is covered |
@@ -18,6 +22,7 @@ The goal is not perfect AI detection. The goal is a cautious provenance workflow
 | `GET /log` endpoint | "API Endpoints" and "Audit Log" sections |
 | Rate limiting with Flask-Limiter | "Rate Limiting" section |
 | README evidence for testing | "Verification Evidence" section |
+| Portfolio walkthrough video | "Portfolio Walkthrough" section |
 | Spec reflection | "Spec Reflection" section |
 | Stretch feature: ensemble detection | "Detection Signals" and "Confidence Scoring" sections |
 | Stretch feature: provenance certificate | "Provenance Certificate" section |
@@ -803,6 +808,7 @@ The following checks were run locally:
 | Check | Result |
 | --- | --- |
 | Flask app import | Passed with `import app` |
+| Portfolio walkthrough | Recorded short Loom walkthrough: https://www.loom.com/share/9ba70a307fae408288b3cb90a89c23c4 |
 | Rate limit | First 10 rapid `/submit` requests returned `200`; next 2 returned `429` |
 | Audit log structure | Latest generated entries contained all required classification and appeal fields, including three individual signal scores |
 | Appeal workflow | `POST /appeal` returned `status: "under_review"` and wrote an `appeal_submitted` event |
