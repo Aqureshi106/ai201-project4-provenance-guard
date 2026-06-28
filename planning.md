@@ -94,7 +94,7 @@ Creative Platform
 
 ## 1. Detection Signals
 
-The system will use two distinct signals for every classification. They are distinct because one signal is semantic and holistic, while the other is structural and statistical.
+The base system uses distinct signals for every classification, and the ensemble stretch feature extends that set to three. The signals are intentionally different: one is semantic and holistic, one is structural and statistical, and the stretch signal is deterministic concrete-context evidence.
 
 | Signal | Tool | What it measures | Output shape | Blind spots |
 | --- | --- | --- | --- | --- |
@@ -202,7 +202,7 @@ Examples:
 | Groq `0.62`, stylometric `0.55` | `0.59` | `uncertain` | `Confidence: 59%.` |
 | Groq `0.90`, stylometric `0.25` | pulled toward `0.64` because signals disagree | `uncertain` | `Confidence: 64%.` |
 
-This scoring design is intentionally conservative. High-confidence AI requires both signals to agree strongly enough to push the combined score to `0.80` or higher. High-confidence human requires both signals to agree strongly enough to push the combined score to `0.30` or lower. A score near `0.5` should be explained as uncertainty, not hidden behind a forced binary label.
+This scoring design is intentionally conservative. High-confidence AI requires the weighted evidence to be strong enough to push the combined score to `0.80` or higher. High-confidence human requires the weighted evidence to push the combined score to `0.30` or lower. A score near `0.5` should be explained as uncertainty, not hidden behind a forced binary label.
 
 ## 3. Transparency Label Design
 
@@ -328,9 +328,9 @@ Trace:
 1. The creator submits polished original text to `POST /submit`.
 2. Groq marks the text AI-like because it is smooth, generic, and evenly organized.
 3. Stylometric heuristics mark the text AI-like because sentence length variance is low and punctuation density is regular.
-4. If both signals are strong, the system may return `likely_ai`; if either signal is weak or contradictory, the result should move to `uncertain`.
+4. If the ensemble evidence is strong, the system may return `likely_ai`; if signals are weak or contradictory, the result should move to `uncertain`.
 5. The label says "Likely AI-generated," not "definitely AI-generated," and describes writing patterns rather than accusing the creator.
-6. The audit log stores the full decision, including both signal scores.
+6. The audit log stores the full decision, including all signal scores.
 7. The creator submits `POST /appeal` with reasoning and any platform-supported context.
 8. The content status becomes `under_review`.
 9. The reviewer can inspect the original decision, signal summaries, confidence score, label text, and creator reasoning.
@@ -346,10 +346,11 @@ Design decisions from this scenario:
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /submit` | Accept text, run both signals, return attribution, confidence, signal details, transparency label, and status. |
+| `POST /submit` | Accept text, run the detection ensemble, return attribution, confidence, signal details, transparency label, and status. |
 | `GET /content/{content_id}` | Return the latest classification and review status for one submitted content item. |
 | `POST /appeal` | Accept creator reasoning, log the appeal, and update content status to `under_review`. |
 | `GET /log` | Return structured audit-log entries for decisions and appeals. |
+| `GET /analytics` | Return a simple audit-log-backed dashboard with detection patterns, appeal rate, and average confidence. |
 | `GET /health` | Return a minimal service health check. |
 
 ## Rate Limiting Plan
@@ -385,6 +386,104 @@ Stretch features must not begin until this section is updated with any extra imp
 | Analytics dashboard | Define the metrics, data source, and route/view that will expose aggregate patterns. | Build a simple dashboard or JSON-backed view showing detection pattern counts, appeal rate, and one extra metric such as average confidence or false-positive review rate. | Document the dashboard route, metrics shown, and how each metric is calculated. |
 | Multi-modal support | Define the second content type, accepted input shape, signal changes, and audit-log fields before implementation. | Extend the submission pipeline beyond text, such as handling image descriptions or structured metadata alongside text. Keep text detection separate from the second content type's analysis. | Document the supported content type, endpoint/request changes, signal behavior, and sample response. |
 
+### Stretch Feature Update: Ensemble Detection
+
+The ensemble implementation adds a third signal named `specificity_context_signal`.
+
+| Signal | Tool | What it measures | Output shape | Blind spots |
+| --- | --- | --- | --- | --- |
+| `specificity_context_signal` | Pure Python | Concrete lived-context markers versus abstract or generic language. It counts first-person markers, sensory/context words, and numbers as human-like specificity, then compares that with abstract generic terms such as "society," "stakeholders," "deployment," and "implications." | JSON object with `score` from `0.0` to `1.0`, where `1.0` means low-specificity or abstract AI-like evidence and `0.0` means concrete human-like evidence, plus metric details and a short `summary`. | Can over-favor diary-like first-person writing and under-favor formal human writing that intentionally avoids personal detail. It also cannot know whether a personal detail is real or fabricated. |
+
+Revised ensemble weights:
+
+| Signal | Weight | Reason |
+| --- | --- | --- |
+| `groq_model_attribution_review` | `0.50` | Still the strongest signal because it reviews meaning and style holistically. |
+| `stylometric_heuristics` | `0.30` | Keeps deterministic structural evidence in the decision. |
+| `specificity_context_signal` | `0.20` | Adds deterministic evidence about concrete context and abstractness without overpowering the existing signals. |
+
+Revised formula:
+
+```text
+weighted_score =
+    (groq_score * 0.50)
+  + (stylometric_score * 0.30)
+  + (specificity_context_score * 0.20)
+
+disagreement = max(signal_scores) - min(signal_scores)
+
+if disagreement >= 0.35:
+    combined_ai_score = weighted_score pulled 0.10 toward 0.50
+else:
+    combined_ai_score = weighted_score
+```
+
+The same attribution thresholds remain in place: `>= 0.80` for `likely_ai`, `<= 0.30` for `likely_human`, and the middle range for `uncertain`. The third signal changes the evidence mix, not the meaning of the labels.
+
+### Stretch Feature Update: Provenance Certificate
+
+The provenance certificate implementation adds a `verified_human` credential that belongs to a creator, not to one text submission.
+
+Verification step:
+
+1. A platform moderator or trusted verification workflow sends `POST /verify-human`.
+2. The request must include `creator_id`, `verification_method`, and `evidence_summary`.
+3. The backend issues a `credential_id`, stores a `human_certificate_issued` audit event, and marks the credential `active`.
+4. The credential lasts 90 days in this local implementation.
+5. Future `POST /submit` responses for that `creator_id` include a separate provenance certificate display object.
+
+Certificate display rule:
+
+```text
+Verified human creator
+```
+
+This badge is displayed separately from the transparency label. It does not change `attribution`, `confidence`, signal scores, or the transparency label. A verified creator can still receive `likely_ai`, `likely_human`, or `uncertain`; the certificate only says the platform has verified the creator through an additional process.
+
+Why it is separate from detection:
+
+- Detection evaluates the submitted text.
+- The certificate evaluates creator verification status.
+- Combining them into one label would hide uncertainty and could make the detector appear more certain than it is.
+
+### Stretch Feature Update: Analytics Dashboard
+
+The analytics dashboard implementation adds a read-only `GET /analytics` route backed by the structured audit log.
+
+Metrics shown:
+
+| Metric | Calculation | Why it matters |
+| --- | --- | --- |
+| Detection patterns | Count `attribution_decision` events grouped by `likely_ai`, `likely_human`, and `uncertain`. | Shows whether the detector is mostly producing confident labels or uncertainty. |
+| Appeal rate | `appeal_submitted` events divided by attribution decisions. | Shows how often creators contest classifications. |
+| Average confidence | Average `confidence` across attribution decisions. | Gives a quick sense of whether decisions are generally strong or near the uncertainty band. |
+
+The route is intentionally simple and local: it renders an HTML dashboard directly from `audit_log.jsonl`. In production this should become an authenticated dashboard backed by database queries and time-window filters.
+
+### Stretch Feature Update: Multi-Modal Support
+
+The multi-modal support implementation extends `POST /submit` to accept a second content type: `image_description`.
+
+Supported content types:
+
+| Content type | Required fields | Optional fields | Detection behavior |
+| --- | --- | --- | --- |
+| `text` | `text`, `creator_id` | `content_type: "text"` | Runs the existing three-signal text ensemble on the submitted text. |
+| `image_description` | `image_description`, `creator_id`, `content_type: "image_description"` | `image_metadata` object | Converts the image description and metadata into an analysis text string, then runs the existing three-signal ensemble on that textual representation. |
+
+The first multi-modal version does not inspect raw image pixels. It supports image-related provenance by accepting a creator-provided or platform-provided image description plus structured metadata such as camera/app source, caption source, alt-text source, or upload context.
+
+Audit-log additions:
+
+- `content_type`
+- `content_summary`
+
+Why this design:
+
+- It extends the API beyond plain text without pretending to perform visual forensics.
+- It keeps text detection separate from the second content type's normalization step.
+- It records the content type in the audit log so later analytics and review can distinguish text decisions from image-description decisions.
+
 ## Audit Log Requirements
 
 Every attribution decision must produce an `attribution_decision` log entry containing:
@@ -397,9 +496,9 @@ Every attribution decision must produce an `attribution_decision` log entry cont
 - returned `attribution`
 - returned `confidence`
 - transparency label text
-- both signal names
-- both signal scores
-- both signal summaries
+- all signal names
+- all signal scores
+- all signal summaries
 - content status
 
 Every appeal must produce an `appeal_submitted` log entry containing the appeal fields listed in the Appeals Workflow section.
