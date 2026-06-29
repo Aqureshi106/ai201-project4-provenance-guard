@@ -10,9 +10,11 @@ This file defines the API surface that the backend implementation must follow. I
 - All confidence and signal scores are numbers from `0.0` to `1.0`.
 - Attribution values: `likely_ai`, `likely_human`, `uncertain`.
 - Content status values: `classified`, `under_review`.
-- Every attribution decision must use both detection signals:
+- Every attribution decision must use the three-signal ensemble:
   - `groq_model_attribution_review`
   - `stylometric_heuristics`
+  - `specificity_context_signal`
+- If the Groq signal falls back to the neutral local placeholder, the response and audit log must include `groq_signal_available: false`.
 
 ## Common Error Response
 
@@ -71,16 +73,28 @@ HTTP `201 Created`
   "attribution": "likely_ai",
   "confidence": 0.95,
   "transparency_label": "Likely AI-generated. Provenance Guard found strong signs of AI-generated writing patterns. Confidence: 95%.",
+  "groq_signal_available": true,
+  "signal_availability": {
+    "groq_model_attribution_review": true,
+    "stylometric_heuristics": true,
+    "specificity_context_signal": true
+  },
   "signals": [
     {
       "name": "groq_model_attribution_review",
       "score": 0.88,
-      "summary": "The model found polished structure, generic transitions, and low lived specificity."
+      "summary": "The model found polished structure, generic transitions, and low lived specificity.",
+      "available": true
     },
     {
       "name": "stylometric_heuristics",
       "score": 0.93,
       "summary": "Sentence length variance, vocabulary diversity, punctuation density, and repetition look unusually uniform."
+    },
+    {
+      "name": "specificity_context_signal",
+      "score": 0.91,
+      "summary": "Text has limited concrete context or leans abstract/generic."
     }
   ],
   "created_at": "2026-06-27T20:15:00Z"
@@ -94,8 +108,9 @@ HTTP `201 Created`
 ### Required Side Effects
 
 - Create a new `content_id`.
-- Run both detection signals.
+- Run all three detection signals.
 - Generate an attribution result, confidence score, and transparency label.
+- Mark Groq fallback results with `groq_signal_available: false`.
 - Write an `attribution_decision` event to the audit log.
 
 ## `GET /content/{content_id}`

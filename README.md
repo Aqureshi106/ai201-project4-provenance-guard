@@ -187,11 +187,18 @@ Response includes at least:
   "confidence": 0.435,
   "label": "Origin uncertain. Provenance Guard found mixed signals, so this text should not be treated as clearly AI-generated or clearly human-written. Confidence: 44%.",
   "transparency_label": "Origin uncertain. Provenance Guard found mixed signals, so this text should not be treated as clearly AI-generated or clearly human-written. Confidence: 44%.",
+  "groq_signal_available": true,
+  "signal_availability": {
+    "groq_model_attribution_review": true,
+    "stylometric_heuristics": true,
+    "specificity_context_signal": true
+  },
   "signals": [
     {
       "name": "groq_model_attribution_review",
       "score": 0.54,
-      "summary": "Short explanation from the model signal."
+      "summary": "Short explanation from the model signal.",
+      "available": true
     },
     {
       "name": "stylometric_heuristics",
@@ -752,6 +759,8 @@ Classification events include:
 - `llm_score`
 - `stylometric_score`
 - `specificity_context_score`
+- `groq_signal_available`
+- `signal_availability`
 - `signal_scores`
 - `signal_summaries`
 - `signal_weights`
@@ -815,6 +824,7 @@ The following checks were run locally:
 | Provenance certificate | `POST /verify-human` returned `201`; the next `/submit` for that creator displayed `Verified human creator` without changing attribution |
 | Analytics dashboard | `GET /analytics.json` returned `200` with detection patterns, appeal rate, and average confidence; `GET /analytics` returned `200` with the HTML dashboard |
 | Multi-modal support | Text and `image_description` submissions returned `200`; invalid image-description payload returned `400` |
+| Unit tests for extracted logic | `python -m unittest discover -s tests` covers payload normalization, deterministic signals, scoring, labels, and Groq fallback availability |
 
 Example scoring outcomes from controlled tests:
 
@@ -859,7 +869,7 @@ Changes I would make before deploying for real:
 
 One way the spec helped: `planning.md` forced the implementation to keep uncertainty visible instead of turning the classifier into a binary AI-or-human tool. The planned thresholds, disagreement adjustment, and transparency label wording gave clear checks for the code: mixed scores should stay `uncertain`, high-confidence AI should require stronger evidence, and labels should describe writing-pattern evidence rather than accuse a creator.
 
-One way implementation diverged from the spec: `api_contract.md` originally describes `POST /submit` as `201 Created` and treats a failed required signal as a `502 signal_unavailable` error. During local implementation, `/submit` was changed to return `200` so the rate-limit verification output matched the project test instructions, and Groq failures fall back to a neutral signal so the rest of the local workflow can still be tested without network/API access. In a production version, I would revisit that divergence and likely return an explicit signal failure instead of silently using a neutral fallback.
+One way implementation diverged from the spec: `api_contract.md` originally describes `POST /submit` as `201 Created` and treats a failed required signal as a `502 signal_unavailable` error. During local implementation, `/submit` was changed to return `200` so the rate-limit verification output matched the project test instructions, and Groq failures fall back to a neutral signal so the rest of the local workflow can still be tested without network/API access. That fallback is now explicit through `groq_signal_available: false` and `signal_availability`, so callers can tell when the result used partial evidence. In a production version, I would revisit the product choice and decide whether a degraded signal should still return a partial result or instead return a `signal_unavailable` error.
 
 ## AI Usage
 
@@ -875,12 +885,15 @@ AI assistance was used as a coding and documentation collaborator, but the imple
 | Provenance certificate stretch | Design and implement a verified-human credential that a creator earns through an additional verification step. | `POST /verify-human`, `human_certificate_issued` audit events, `provenance_certificate` response fields, and `display.provenance_badge`. | The credential was kept separate from `attribution` and `confidence`; a verified creator can still receive a `likely_ai` label, proving the badge does not override detection evidence. |
 | Analytics dashboard stretch | Build a simple view showing detection patterns, appeal rates, and one additional metric. | `analytics_summary`, `GET /analytics`, and `GET /analytics.json`, backed by `audit_log.jsonl`. | The dashboard was kept read-only and transparent about its calculations; average confidence was chosen as the additional metric because it shows whether decisions cluster near uncertainty. |
 | Multi-modal support stretch | Extend the pipeline to support a second content type in addition to text. | `normalize_submission_payload`, `content_type: "image_description"`, `image_metadata`, and audit fields for `content_type` and `content_summary`. | The implementation was limited to image descriptions and metadata rather than raw image analysis, so the detector does not overclaim visual-forensics capability. |
+| Testability feedback refactor | Separate testable detection and scoring logic from Flask routes, then encode representative scoring examples as unit tests. | `provenance_logic.py` with signal functions, scoring, labels, and normalization; `tests/test_provenance_logic.py` with direct unit tests. | The route layer was kept responsible for HTTP, credentials, and audit logging, while pure logic can now be verified without running the server. The Groq failure fallback was also revised to expose `groq_signal_available`. |
 
 ## File Map
 
 | File | Purpose |
 | --- | --- |
-| `app.py` | Flask routes, detection signals, scoring, labels, audit logging, rate limiting |
+| `app.py` | Flask routes, audit logging, creator verification, appeals, analytics, rate limiting |
+| `provenance_logic.py` | Payload normalization, detection signals, scoring, transparency labels, Groq fallback shape |
+| `tests/test_provenance_logic.py` | Unit tests for normalization, deterministic signals, scoring examples, labels, and fallback availability |
 | `planning.md` | Design spec, architecture diagram, scoring rationale, appeals workflow |
 | `api_contract.md` | API contract drafted before implementation |
 | `audit_log.jsonl` | Structured local audit log |
